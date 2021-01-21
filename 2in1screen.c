@@ -1,9 +1,8 @@
-// gcc -O2 -o 2in1screen 2in1screen.c
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <yaml.h>
 
 #define DATA_SIZE 256
 #define N_STATE 2
@@ -24,6 +23,11 @@ double accel_y = 0.0,
 
 int current_state = 0;
 
+/**
+ * @brief 
+ * 
+ * @return int 
+ */
 int rotation_changed(){
 	int state = 0;
 
@@ -41,6 +45,13 @@ int rotation_changed(){
 	else return 0;
 }
 
+/**
+ * @brief 
+ * 
+ * @param fname 
+ * @param leave_open 
+ * @return FILE* 
+ */
 FILE* bdopen(char const *fname, char leave_open){
 	*basedir_end = '/';
 	strcpy(basedir_end+1, fname);
@@ -55,6 +66,10 @@ FILE* bdopen(char const *fname, char leave_open){
 	else return fin;
 }
 
+/**
+ * @brief 
+ * 
+ */
 void rotate_screen(){
 	sprintf(command, "xrandr -o %s", ROT[current_state]);
 	system(command);
@@ -62,6 +77,13 @@ void rotate_screen(){
 	system(command);
 }
 
+/**
+ * @brief 
+ * 
+ * @param argc 
+ * @param argv 
+ * @return int 
+ */
 int main(int argc, char const *argv[]) {
 	FILE *pf = popen("ls /sys/bus/iio/devices/iio:device*/in_accel*", "r");
 	if(!pf){
