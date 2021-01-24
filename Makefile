@@ -1,23 +1,26 @@
 # compiler to use
-CC = clang
+CC = g++
 
 # flags to pass compiler
 CFLAGS = -Wall -Werror
 
 # name for executable
-BIN = 2in1screen
+BIN = enable2in1screen
 
 # space-separated list of source files
-SRCS = 2in1screen.c
+SRCS = config.cpp enable2in1screen.cpp
+
+LIBS = -ljsoncpp -liio
 
 # automatically generated list of object files
-OBJS = $(SRCS:.c=.o)
+OBJS = $(SRCS:.cpp=.o)
 
 all: $(BIN)
+	chmod a+x $(BIN)
 
 # binarie
 $(BIN): $(OBJS)
-	$(CC) $(CFLAGS) -o $@ $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $(OBJS) $(LIBS)
 	
 # dependencies
 $(OBJS): Makefile
