@@ -8,9 +8,9 @@ CFLAGS = -Wall -Werror
 BIN = enable2in1screen
 
 # space-separated list of source files
-SRCS = config.cpp enable2in1screen.cpp
-
-LIBS = -ljsoncpp -liio
+SRCS =  config.cpp enable2in1screen.cpp
+#orientation.cpp
+LIBS = -Wall -ldl -linput -ludev -ljsoncpp -liio -lX11 -lXrandr
 
 # automatically generated list of object files
 OBJS = $(SRCS:.cpp=.o)
