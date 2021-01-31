@@ -1,2 +1,3 @@
-2in1screen.o
-2in1screen
+*.o
+*.log
+enable2in1screen

@@ -1,5 +1,13 @@
-#include "config.hpp"
+//#include "config.hpp"
+#include <string>
+#include <json/json.h>
+#include <iio.h>
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <iio.h>
 class Config {
 
   Config() {}

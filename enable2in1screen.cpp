@@ -1,7 +1,5 @@
 #include "config.hpp"
-#include "include.h"
-#include <X11/Xlib.h>
-#include <X11/extensions/randr.h>
+#include <cstdio>
 #include <ctime>
 #include <fcntl.h>
 #include <iio.h>
@@ -13,8 +11,15 @@
 #include <unistd.h>
 #include <vector>
 
+#include <X11/Xatom.h>
+#include <X11/Xlib.h>
+#include <X11/extensions/XI.h>
+#include <X11/extensions/XInput.h>
+#include <X11/extensions/XInput2.h>
 #include <X11/extensions/Xrandr.h>
+#include <X11/extensions/randr.h>
 
+#include "transform.h"
 /*
 #include <stdio.h>
 #include <sys/stat.h>
@@ -22,10 +27,22 @@
 #include <unistd.h>
 */
 
+int catcher(Display *disp, XErrorEvent *xe) {
+  printf("Something had happened, bruh.\n");
+  return 0;
+}
+
 static int open_restricted(const char *path, int flags, void *user_data) {
   int fd = open(path, flags);
   return fd < 0 ? -errno : fd;
 }
+
+std::string COOR[4] = {"1 0 0 0 1 0 0 0 1", "0 -1 1 1 0 0 0 0 1",
+                       "-1 0 1 0 -1 1 0 0 1", "0 1 0 -1 0 1 0 0 1"};
+static const float MatrixRotatation[4][6] = {{1, 0, 0, 0, 1, 0},
+                                             {0, -1, 1, 1, 0, 0},
+                                             {-1, 0, 1, 0, -1, 1},
+                                             {0, 1, 0, -1, 0, 1}};
 
 static void close_restricted(int fd, void *user_data) { close(fd); }
 
@@ -42,9 +59,9 @@ private:
   double accel_scale;
   double accel_g = 7.0;
 
-  std::vector<std::string> input_devices_path;
+  std::vector<libinput_device *> li_touch_devices;
 
-  int current_state;
+  int current_state = 0;
 
   const char *attr_accel_x;
   const char *attr_accel_y;
@@ -91,7 +108,7 @@ public:
               iio_channel_enable(channel);
             }
             this->attr_accel_x = attr;
-            
+
           } else if (filename.find(name_accel_y) != std::string::npos) {
             if (!this->channel) {
               this->channel = channel;
@@ -99,7 +116,7 @@ public:
               iio_channel_enable(channel);
             }
             this->attr_accel_y = attr;
-            
+
           } else if (filename.find(name_accel_z) != std::string::npos) {
             if (!this->channel) {
               this->channel = channel;
@@ -107,17 +124,14 @@ public:
               iio_channel_enable(channel);
             }
             this->attr_accel_z = attr;
-            
-          } else if (filename.find(name_in_accel_scale) !=
-                     std::string::npos) {
+
+          } else if (filename.find(name_in_accel_scale) != std::string::npos) {
             if (!this->channel) {
               this->channel = channel;
               this->device = device;
               iio_channel_enable(channel);
             }
-            iio_channel_attr_read_double(channel, attr,
-                                         &accel_scale);
-            
+            iio_channel_attr_read_double(channel, attr, &accel_scale);
           }
         }
       }
@@ -128,22 +142,19 @@ public:
     if (!this->channel)
       return -1;
 
-    iio_channel_attr_read_double(channel, attr_accel_x,
-                                 &accel_x);
+    iio_channel_attr_read_double(channel, attr_accel_x, &accel_x);
     accel_x *= accel_scale;
-    iio_channel_attr_read_double(channel, attr_accel_y,
-                                 &accel_y);
+    iio_channel_attr_read_double(channel, attr_accel_y, &accel_y);
     accel_y *= accel_scale;
-    iio_channel_attr_read_double(channel, attr_accel_z,
-                                 &accel_z);
+    iio_channel_attr_read_double(channel, attr_accel_z, &accel_z);
     accel_z *= accel_scale;
 
-/*
-    printf("accel_x %2.2f ",accel_x);
-    printf("accel_y %2.2f ",accel_y);
-    printf("accel_z %2.2f\n",accel_z);
-    printf("accel_g %2.2f\n",accel_g);
-*/
+    /*
+        printf("accel_x %2.2f ",accel_x);
+        printf("accel_y %2.2f ",accel_y);
+        printf("accel_z %2.2f\n",accel_z);
+        printf("accel_g %2.2f\n",accel_g);
+    */
     return 1;
   }
   int change_state() {
@@ -205,8 +216,6 @@ public:
       const char *path = udev_list_entry_get_name(entry);
       struct udev_device *scsi = udev_device_new_from_syspath(udev, path);
 
-      input_devices_path.push_back(path);
-
       list_attr(udev, scsi);
 
       udev_device_unref(scsi);
@@ -215,8 +224,7 @@ public:
     udev_enumerate_unref(enumerate);
   }
 
-  static void print_device_notify(struct libinput_event *ev) {
-    struct libinput_device *dev = libinput_event_get_device(ev);
+  static void print_device_notify(struct libinput_device *dev) {
     struct libinput_seat *seat = libinput_device_get_seat(dev);
     struct libinput_device_group *group;
     struct udev_device *udev_device;
@@ -275,10 +283,8 @@ public:
     struct udev *udev = udev_new();
     struct libinput_event *ev;
 
-    puts("libinput_udev_create_context");
-
     li = libinput_udev_create_context(&interface, NULL, udev);
-    // udev_unref(udev);
+
     if (libinput_udev_assign_seat(li, "seat0") == -1)
       perror("error in libinput_udev_assign_seat");
 
@@ -290,12 +296,15 @@ public:
         if (libinput_device_has_capability(dev, LIBINPUT_DEVICE_CAP_TOUCH) ||
             libinput_device_has_capability(dev,
                                            LIBINPUT_DEVICE_CAP_TABLET_TOOL)) {
-          printf("tablet ");
-          print_device_notify(ev);
+          li_touch_devices.push_back(libinput_event_get_device(ev));
         }
         libinput_event_destroy(ev);
         libinput_dispatch(li);
       }
+    }
+
+    for (int i = 0; i < li_touch_devices.size(); i++) {
+      print_device_notify(li_touch_devices[i]);
     }
 
     libinput_unref(li);
@@ -335,6 +344,46 @@ public:
 
     XRRSetScreenConfig(dpy, config, root, current_size_id, new_rotation,
                        timestamp);
+    float matrix[6];
+    struct libinput *li;
+    struct udev *udev = udev_new();
+    struct libinput_event *ev;
+
+    li = libinput_udev_create_context(&interface, NULL, udev);
+
+    if (libinput_udev_assign_seat(li, "seat0") == -1)
+      perror("error in libinput_udev_assign_seat");
+
+    libinput_dispatch(li);
+    struct libinput_device *dev;
+    while ((ev = libinput_get_event(li))) {
+      if (libinput_event_get_type(ev) == LIBINPUT_EVENT_DEVICE_ADDED) {
+        dev = libinput_event_get_device(ev);
+        if (libinput_device_has_capability(dev, LIBINPUT_DEVICE_CAP_TOUCH) ||
+            libinput_device_has_capability(dev,
+                                           LIBINPUT_DEVICE_CAP_TABLET_TOOL)) {
+
+          switch (libinput_device_config_calibration_set_matrix(
+              dev, MatrixRotatation[this->current_state])) {
+          case LIBINPUT_CONFIG_STATUS_SUCCESS:
+            puts("LIBINPUT_CONFIG_STATUS_SUCCESS");
+            break;
+          case LIBINPUT_CONFIG_STATUS_UNSUPPORTED:
+            puts("LIBINPUT_CONFIG_STATUS_UNSUPPORTED");
+            break;
+          case LIBINPUT_CONFIG_STATUS_INVALID:
+            puts("LIBINPUT_CONFIG_STATUS_INVALID");
+            break;
+          }
+
+          libinput_device_config_calibration_get_matrix(dev, matrix);
+          printf("{%f,%f,%f,%f,%f,%f}\n", matrix[0], matrix[1], matrix[2],
+                 matrix[3], matrix[4], matrix[5]);
+        }
+        libinput_event_destroy(ev);
+        libinput_dispatch(li);
+      }
+    }
   }
 };
 
@@ -349,37 +398,77 @@ int main(int argc, char const *argv[]) {
 
   Enable2In1Screen enable2in1screen;
 
-  //enable2in1screen.enumerate_usb_mass_storage();
+  // enable2in1screen.enumerate_usb_mass_storage();
   enable2in1screen.iio_search_accelerator();
 
+  // return 0;
+  // XGetDeviceProperty
+
+  enable2in1screen.testlibinput();
   while (true) {
     enable2in1screen.read_accel();
     if (enable2in1screen.rotation_changed()) {
-       enable2in1screen.rotate_screen();
+      enable2in1screen.rotate_screen();
 
-      // enable2in1screen.testlibinput();
+      Display *dpy = XOpenDisplay(NULL);
+      int nbDevices, nbProperties;
+
+      XDeviceInfo *devices = XListInputDevices(dpy, &nbDevices);
+
+      char command[256 * 4];
+
+      for (int i = 0; i < nbDevices; i++) {
+        std::string atomName;
+        bool found = false;
+
+        if (devices[i].type != 0l) {
+          atomName.assign(XGetAtomName(dpy, devices[i].type));
+          found = (atomName.compare(XI_TOUCHSCREEN) == 0);
+          //found = ((atomName.compare(XI_TABLET) == 0) ||
+          //         (atomName.compare(XI_TOUCHSCREEN) == 0));
+        } else {
+          atomName.assign("BadAtom");
+        }
+        if (found) {
+
+          sprintf(
+              command,
+              "xinput set-prop \"%s\" \"Coordinate Transformation Matrix\" %s",
+              devices[i].name, COOR[enable2in1screen.get_state()].c_str());
+          printf("%s\n", command);
+          system(command);
+          /*
+          std::vector<float> data4;
+
+          long l;
+          printf("size of long (%lu)", sizeof(l));
+          if ((sizeof l) == 4) {
+            data4 = {1., 0., 0., 0., 1., 0., 0., 0., 1.};
+
+          } else if ((sizeof l) == 8) {
+            // Xlib needs the floats long-aligned, so add "buffer" elements.
+            data4 = {1., 0., 0., 0., 0., 0., 0., 0., 1.,
+                     0., 0., 0., 0., 0., 0., 0., 1., 0.};
+          }
+
+          try {
+
+          XIChangeProperty(
+              dpy, devices[i].id,
+              XInternAtom(dpy, CoordinateTransformationMatrix.c_str(), 0),
+              XInternAtom(dpy, "FLOAT", 0), 32, PropModeReplace,
+              (unsigned char *)data4.data(), 9);
+
+          } catch (XErrorEvent xee) {
+          puts("XErrorEvent error");
+          }
+          */
+        }
+      }
+      XFreeDeviceList(devices);
     }
     sleep(3);
   }
 
   return 0;
 }
-
-// Rotation XRRRotations(Display *dpy, int screen, Rotation *current_rotation);
-/**
- * @brief
-
- #define RR_Rotate_0		1
-#define RR_Rotate_90		2
-#define RR_Rotate_180		4
-#define RR_Rotate_270		8
-
-
-Status XRRSetScreenConfig (Display *dpy,
-                           XRRScreenConfiguration *config,
-                           Drawable draw,
-                           int size_index,
-                           Rotation rotation,
-                           Time timestamp);
- *
- */
